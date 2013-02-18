@@ -184,6 +184,39 @@ class StreamplotSet(object):
         self.arrows = arrows
 
 
+#
+# Overview of changes
+# ===================
+#
+# These changes are designed to allow an irregular grid to be used in
+# place of the current requirement for an equally spaced grid. The
+# data still must be gridded. This is needed for many atmospheric
+# science applications especially when a vertical coordinate is
+# plotted.
+#
+# Irregular grids can be incorporated without much penalty as follows:
+# * data <=> mask as before
+# * grid <=> data using 1d interpolation in both directions
+# * grid <=> mask as two-step process
+#
+# Integration still takes place on the grid, but uscale and vscale
+# rescale the interpolated u and v inside each cell to give continuity
+# at cell boundaries.
+#
+# Code that will be changed:
+#
+# 1. Grid class -- must be reimplemented giving uscale and vscale in
+#    nx and ny, and the use of array dx and dy.
+#
+# 2. Integration code -- a simple change to use uscale and vscale.
+#
+# 3. DomainMap -- use 1d linear interpolation for data <=> grid
+#
+# The 1d linear interpolation needs some state information. I will
+# initially therefore put this state in to grid.
+
+
+
 # Coordinate definitions
 #========================
 
