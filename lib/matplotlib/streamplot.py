@@ -188,20 +188,21 @@ class StreamplotSet(object):
 # Overview of changes
 # ===================
 #
-# These changes are designed to allow an irregular grid to be used in
-# place of the current requirement for an equally spaced grid. The
-# data still must be gridded. This is needed for many atmospheric
-# science applications especially when a vertical coordinate is
-# plotted.
+# These changes are designed to allow a relaxation of the current
+# requirement for an equally spaced grid. The data still must be
+# gridded but does not have to be equally spaced.
 #
-# Irregular grids can be incorporated without much penalty as follows:
-# * data <=> mask as before
-# * grid <=> data using 1d interpolation in both directions
-# * grid <=> mask as two-step process
+# Irregular grids can be incorporated without much penalty because:
 #
-# Integration still takes place on the grid, but uscale and vscale
-# rescale the interpolated u and v inside each cell to give continuity
-# at cell boundaries.
+# * grid => mask transformation is the only one which is used every
+#   integration time step.
+#
+# * grid <=> mask can be done with 1d interpolation and int() indexing
+#   tricks rather than full search-based interpolation.
+#
+# * integration can still take place on the grid, but with uscale and
+#   vscale to rescale the interpolated u and v inside each cell to
+#   give continuity at cell boundaries.
 #
 # Code that will be changed:
 #
@@ -210,10 +211,8 @@ class StreamplotSet(object):
 #
 # 2. Integration code -- a simple change to use uscale and vscale.
 #
-# 3. DomainMap -- use 1d linear interpolation for data <=> grid
-#
-# The 1d linear interpolation needs some state information. I will
-# initially therefore put this state in to grid.
+# 3. DomainMap -- reimplement data2grid, grid2data and grid2mask. The
+#    second two can be optimised using int() tricks.
 
 
 
