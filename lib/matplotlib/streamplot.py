@@ -552,8 +552,8 @@ def _integrate_rk12(x0, y0, dmap, f):
     ## increment the location gradually. However, due to the efficient
     ## nature of the interpolation, this doesn't boost speed by much
     ## for quite a bit of complexity.
-    maxds = 1.0 * min(1 / dmap.mask.nx, 1. / dmap.mask.ny, 0.1,
-                      1 / dmap.grid.nx, 1. / dmap.grid.ny)
+    maxds = 1.0 * min(1. / dmap.mask.nx, 1. / dmap.mask.ny, 0.1,
+                      1. / dmap.grid.nx, 1. / dmap.grid.ny)
 
     ds = maxds
     stotal = 0
