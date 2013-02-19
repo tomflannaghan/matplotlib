@@ -11,6 +11,48 @@ import matplotlib.collections as mcollections
 import matplotlib.patches as patches
 import bisect
 
+#
+# Overview of changes
+# ===================
+#
+# These changes are designed to allow a relaxation of the current
+# requirement for an equally spaced grid. The data still must be
+# gridded but does not have to be equally spaced.
+#
+# Irregular grids can be incorporated without much penalty because:
+#
+# * bisect.bisect([], x) is fast allowing full dimension
+#   searches. This is not a performance hit even when a dimension is
+#   ~1000 long.
+#
+# * integration can still take place on the grid, but with uscale and
+#   vscale to rescale the interpolated u and v inside each cell.
+#
+# Some speed tests (using streamplot_uneven_demo.py):
+#
+# version    grid     time
+# ---------------------------
+# original   even     1.3 sec
+# new        even     1.6 sec
+# new        uneven   1.8 sec
+#
+# The slowdown from original to new using an even grid is due to a
+# decreased maxds. This is easily fixable for the even grid case but
+# is required in the uneven case.
+#
+# The slowdown from even to uneven grid in the new code is almost all
+# due to discontinuity in u and v causing the adaptive timestep scheme
+# to make small steps near grid boundaries.
+#
+# Code changes:
+#
+# 1. Grid class: removed origin, dx and dy.
+#
+# 2. DomainMap: added a CoordinateMap class to handle each coordinate
+#               separately. renamed and tidied the methods to better
+#               represent their function. added grid2data method
+#               rather than using grid properties to do this.
+
 
 __all__ = ['streamplot']
 
@@ -187,49 +229,15 @@ class StreamplotSet(object):
         self.arrows = arrows
 
 
-#
-# Overview of changes
-# ===================
-#
-# These changes are designed to allow a relaxation of the current
-# requirement for an equally spaced grid. The data still must be
-# gridded but does not have to be equally spaced.
-#
-# IMPORTANT: use the bisect library (see below) to do the index search
-#            as it is really fast, and faster than the int() trick in
-#            most cases.
-#
-# Irregular grids can be incorporated without much penalty because:
-#
-# * bisect.bisect([], x) is faster than the int(x) trick for list
-#   argument and type(x) = numpy.float64 -- quite surprising really!
-#   int(x) is faster when type(x) = float. In the current streamplot
-#   code, type is typically numpy.float64 which is hurting performance
-#   when we do the int trick -- using numpy.int() solves this problem
-#   although still slower than bisect. This is true for arrays of 360
-#   items but will go like log(n), whereas the int trick is constant
-#   in time.
-#
-# * integration can still take place on the grid, but with uscale and
-#   vscale to rescale the interpolated u and v inside each cell to
-#   give continuity at cell boundaries rather than using data2grid.
-#
-# Code that will be changed:
-#
-# 1. Grid class: scrap origin, dx and dy. These should not be
-#                used.
-#
-# 2. DomainMap: reimplement mask2grid and grid2mask using bisect. Add
-#               uv2grid to apply uscale and vscale to u and v (used by
-#               integration code.) Change grid2data to do coordinate
-#               transform rather than u, v rescaling.
-
 # Coordinate definitions
 #========================
 
+# A refactoring of the original code
 class EvenCoordinateMap(object):
     def __init__(self, x, mask_size):
-        """ """
+        """EvenCoordinateMap maps between different grids along one
+        direction. Requires (and assumes) that the axis `x` is evenly
+        spaced."""
         self.x = np.array(x)
         self.dx = np.array(x[1:] - x[:-1])
         self.ms = mask_size
@@ -241,7 +249,7 @@ class EvenCoordinateMap(object):
     
     def grid2mask_closest(self, xi):
         """Return nearest space in mask-coords from given grid-coords."""
-        return int((xi * self.const_grid2mask) + 0.5)
+        return np.int((xi * self.const_grid2mask) + 0.5)
     
     def mask2grid(self, xm):
         return xm * self.const_mask2grid
@@ -255,14 +263,19 @@ class EvenCoordinateMap(object):
         else:
             return self.x[gi] + (g - gi) * self.dx[gi]
 
-
+# the new code
 class CoordinateMap(object):
     def __init__(self, x, mask_size):
-        """ """
+        """CoordinateMap maps between different grids along one
+        direction. Does not assume that `x` is evenly spaced.
+        TODO: Currently requires that x is increasing.
+        """
+        
         self.x = np.array(x)
         self.dx = np.array(x[1:] - x[:-1])
+        assert np.all(self.dx > 0) # fix this
         self.ms = mask_size
-
+ 
         x_even = np.linspace(x[0], x[-1], mask_size)
         mx = np.arange(mask_size)
         self.m_at_x = self._interp1d(x_even, mx, x)
@@ -308,11 +321,24 @@ class CoordinateMap(object):
     def grid2data(self, g):
         ## Needed for post-processing. Can only do one point at a
         ## time. This is not a bottleneck.
-        gi = np.int(g)
+        gi = int(g)
         if gi == len(self.x)-1:
             return self.x[-1]
         else:
             return self.x[gi] + (g - gi) * self.dx[gi]
+
+def get_coordinate_map(x, mask_size):
+    """A factory function that selects the appropriate CoordinateMap
+    class."""
+    ## dx.std / dx.mean is a good way to test for even spacing while
+    ## not being susceptible to rounding errors. < 1e-5 should always
+    ## pass for even coordinates. Taking the absolute value means this
+    ## method remains valid when the axis is decreasing.
+    dx = np.abs(x[1:] - x[:-1])
+    if dx.std() / dx.mean() < 1e-5:
+        return EvenCoordinateMap(x, mask_size)
+    else:
+        return CoordinateMap(x, mask_size)
 
 
 class DomainMap(object):
@@ -337,8 +363,8 @@ class DomainMap(object):
         self.grid = grid
         self.mask = mask
 
-        self.x = CoordinateMap(grid.x, mask.nx)
-        self.y = CoordinateMap(grid.y, mask.ny)
+        self.x = get_coordinate_map(grid.x, mask.nx)
+        self.y = get_coordinate_map(grid.y, mask.ny)
 
         self.uscale = self.x.vel_scale
         self.vscale = self.y.vel_scale
@@ -352,7 +378,6 @@ class DomainMap(object):
 
     def grid2data(self, xi, yi):
         return self.x.grid2data(xi), self.y.grid2data(yi)
-
 
     def start_trajectory(self, xg, yg):
         xm, ym = self.grid2mask(xg, yg)
@@ -421,11 +446,11 @@ class StreamMask(object):
     def __init__(self, density):
         if np.isscalar(density):
             assert density > 0
-            self.nx = self.ny = int(30 * density)
+            self.nx = self.ny = np.int(30 * density)
         else:
             assert len(density) == 2
-            self.nx = int(25 * density[0])
-            self.ny = int(25 * density[1])
+            self.nx = np.int(25 * density[0])
+            self.ny = np.int(25 * density[1])
         self._mask = np.zeros((self.ny, self.nx))
         self.shape = self._mask.shape
 
