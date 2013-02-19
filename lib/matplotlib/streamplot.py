@@ -9,6 +9,7 @@ import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.collections as mcollections
 import matplotlib.patches as patches
+import bisect
 
 
 __all__ = ['streamplot']
@@ -111,6 +112,7 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
 
     trajectories = []
     for xm, ym in _gen_starting_points(mask.shape):
+        print xm, ym
         if mask[ym, xm] == 0:
             xg, yg = dmap.mask2grid(xm, ym)
             t = integrate(xg, yg)
@@ -131,8 +133,10 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
         tgx = np.array(t[0])
         tgy = np.array(t[1])
         # Rescale from grid-coordinates to data-coordinates.
-        tx = np.array(t[0]) * grid.dx + grid.x_origin
-        ty = np.array(t[1]) * grid.dy + grid.y_origin
+        tx = np.zeros_like(tgx)
+        ty = np.zeros_like(tgy)
+        for i, (_tgx, _tgy) in enumerate(zip(tgx, tgy)):
+            tx[i], ty[i] = dmap.grid2data(_tgx, _tgy)
 
         points = np.transpose([tx, ty]).reshape(-1, 1, 2)
         streamlines.extend(np.hstack([points[:-1], points[1:]]))
@@ -192,32 +196,125 @@ class StreamplotSet(object):
 # requirement for an equally spaced grid. The data still must be
 # gridded but does not have to be equally spaced.
 #
+# IMPORTANT: use the bisect library (see below) to do the index search
+#            as it is really fast, and faster than the int() trick in
+#            most cases.
+#
 # Irregular grids can be incorporated without much penalty because:
 #
-# * grid => mask transformation is the only one which is used every
-#   integration time step.
-#
-# * grid <=> mask can be done with 1d interpolation and int() indexing
-#   tricks rather than full search-based interpolation.
+# * bisect.bisect([], x) is faster than the int(x) trick for list
+#   argument and type(x) = numpy.float64 -- quite surprising really!
+#   int(x) is faster when type(x) = float. In the current streamplot
+#   code, type is typically numpy.float64 which is hurting performance
+#   when we do the int trick -- using numpy.int() solves this problem
+#   although still slower than bisect. This is true for arrays of 360
+#   items but will go like log(n), whereas the int trick is constant
+#   in time.
 #
 # * integration can still take place on the grid, but with uscale and
 #   vscale to rescale the interpolated u and v inside each cell to
-#   give continuity at cell boundaries.
+#   give continuity at cell boundaries rather than using data2grid.
 #
 # Code that will be changed:
 #
-# 1. Grid class -- must be reimplemented giving uscale and vscale in
-#    nx and ny, and the use of array dx and dy.
+# 1. Grid class: scrap origin, dx and dy. These should not be
+#                used.
 #
-# 2. Integration code -- a simple change to use uscale and vscale.
-#
-# 3. DomainMap -- reimplement data2grid, grid2data and grid2mask. The
-#    second two can be optimised using int() tricks.
-
-
+# 2. DomainMap: reimplement mask2grid and grid2mask using bisect. Add
+#               uv2grid to apply uscale and vscale to u and v (used by
+#               integration code.) Change grid2data to do coordinate
+#               transform rather than u, v rescaling.
 
 # Coordinate definitions
 #========================
+
+class CoordinateMap(object):
+    def __init__(self, x, mask_size):
+        """ """
+        self.x = [np.float64(_x) for _x in x]
+        self.dx = [np.float64(_x) for _x in x[1:] - x[:-1]]
+        self.ms = mask_size
+
+        x_even = np.linspace(x[0], x[-1], mask_size)
+        #x_even = np.r_[[x[0]], 0.5 * (x_even[1:] + x_even[:-1]), [x[-1]]]
+        mx = np.arange(mask_size)
+        self.m_at_x = self._interp1d(x_even, mx, x)
+        self.m_at_x_arr = np.array(self.m_at_x)
+        #self.m2g_scale = list(1 / (self.m_at_x_arr[1:] - self.m_at_x_arr[:-1]))
+
+        g = range(len(x))
+        self.g_at_m = self._interp1d(x, g, x_even)
+        self.data2mask_const = mask_size / (x[-1] - x[0])
+
+        self.vel_scale = 1. / np.array(self.dx) #len(x) / (x[-1] - x[0])
+
+
+    #def _interp1d_sp(self, x, y, x_new):
+    #    return list(scipy.interpolate.interp1d(x, y)(x_new))
+
+    def _interp1d(self, x, y, new_xs):
+        ## Checked and does the same as _interp1d_sp.
+        x = list(x)
+        new_ys = []
+        y = np.array(y)
+        dy = y[1:] - y[:-1]
+        for new_x in new_xs:
+            xi = bisect.bisect(x, new_x) - 1
+            if xi == len(x) - 1: 
+                new_ys.append(y[xi])
+            else:
+                xf = (new_x - x[xi]) / (x[xi+1] - x[xi])
+                new_ys.append(y[xi] + xf * dy[xi])
+        return new_ys
+
+    #def data2mask_index(self, x):
+    #    return np.int(self.data2mask(x))
+
+    #def mask2data_index(self, m):
+    #    ## Not needed
+    #    return bisect.bisect(self.m_at_x, m) - 1
+
+    #def data2grid_index(self, x):
+    #    return bisect.bisect(self.x, x)
+
+    def grid2mask_index(self, g):
+        ## Needed each time-step
+        return bisect.bisect(self.g_at_m, g) - 1
+
+    def grid2mask_closest(self, g):
+        m = self.grid2mask_index(g)
+        if m == self.ms - 1: return self.ms - 1
+        dm = (g - self.g_at_m[m]) / (self.g_at_m[m+1] - self.g_at_m[m])
+        return m + (dm > 0.5)
+
+    #def data2mask(self, x):
+    #    return self.data2mask_const * (x - self.x[0])
+    
+    def mask2grid(self, m):
+        ## Needed for set up -- not performance critical
+        m_at_x = self.m_at_x ## speeds up code
+        g0 = bisect.bisect_right(m_at_x, m) - 1 # copied from mask2data_index
+        if g0 == len(m_at_x) - 1: g0 = len(m_at_x) - 2
+        return g0 + (m - m_at_x[g0]) / (m_at_x[g0+1] - m_at_x[g0])
+        
+    #def grid2mask(self, g):
+    #    m0 = self.data2mask_index(g)
+    #   return m0 + (g - self.g_at_m[m0]) \
+    #        / (self.g_at_m[m0+1] - self.g_at_m[m0])
+        
+    def grid2data(self, g):
+        ## Needed for post-processing
+        gi = np.int(g)
+        if gi == len(self.x)-1:
+            return self.x[-1]
+        else:
+            return self.x[gi] + (g - gi) * self.dx[gi]
+
+
+
+
+
+
 
 class DomainMap(object):
     """Map representing different coordinate systems.
@@ -240,26 +337,30 @@ class DomainMap(object):
     def __init__(self, grid, mask):
         self.grid = grid
         self.mask = mask
-        ## Constants for conversion between grid- and mask-coordinates
-        self.x_grid2mask = float(mask.nx - 1) / grid.nx
-        self.y_grid2mask = float(mask.ny - 1) / grid.ny
 
-        self.x_mask2grid = 1. / self.x_grid2mask
-        self.y_mask2grid = 1. / self.y_grid2mask
+        self.x = CoordinateMap(grid.x, mask.nx)
+        self.y = CoordinateMap(grid.y, mask.ny)
 
-        self.x_data2grid = grid.nx / grid.width
-        self.y_data2grid = grid.ny / grid.height
+        #self.uscale = np.ones(len(grid.x)-1) \
+        #    * grid.nx / grid.width
+
+        self.uscale = self.x.vel_scale
+        self.vscale = self.y.vel_scale
+
+        #self.vscale = np.ones(len(grid.y)-1) \
+        #    * grid.ny / grid.height
+
 
     def grid2mask(self, xi, yi):
         """Return nearest space in mask-coords from given grid-coords."""
-        return int((xi * self.x_grid2mask) + 0.5), \
-               int((yi * self.y_grid2mask) + 0.5)
+        return  self.x.grid2mask_closest(xi), self.y.grid2mask_closest(yi)
 
     def mask2grid(self, xm, ym):
-        return xm * self.x_mask2grid, ym * self.y_mask2grid
+        return self.x.mask2grid(xm), self.y.mask2grid(ym)
 
-    def data2grid(self, xd, yd):
-        return xd * self.x_data2grid, yd * self.y_data2grid
+    def grid2data(self, xi, yi):
+        return self.x.grid2data(xi), self.y.grid2data(yi)
+
 
     def start_trajectory(self, xg, yg):
         xm, ym = self.grid2mask(xg, yg)
@@ -282,7 +383,6 @@ class DomainMap(object):
 class Grid(object):
     """Grid of data."""
     def __init__(self, x, y):
-
         if len(x.shape) == 2:
             x_row = x[0]
             assert np.allclose(x_row, x)
@@ -297,14 +397,11 @@ class Grid(object):
         else:
             assert len(y.shape) == 1
 
+        self.x = x
+        self.y = y
+
         self.nx = len(x)
         self.ny = len(y)
-
-        self.dx = x[1] - x[0]
-        self.dy = y[1] - y[0]
-
-        self.x_origin = x[0]
-        self.y_origin = y[0]
 
         self.width = x[-1] - x[0]
         self.height = y[-1] - y[0]
@@ -317,7 +414,7 @@ class Grid(object):
         """Return True if point is a valid index of grid."""
         # Note that xi/yi can be floats; so, for example, we can't simply check
         # `xi < self.nx` since `xi` can be `self.nx - 1 < xi < self.nx`
-        return xi >= 0 and xi <= self.nx - 1 and yi >= 0 and yi <= self.ny - 1
+        return xi >= 0 and xi < self.nx - 1 and yi >= 0 and yi < self.ny - 1
 
 
 class StreamMask(object):
@@ -382,12 +479,9 @@ class TerminateTrajectory(Exception):
 
 def get_integrator(u, v, dmap, minlength):
 
-    # rescale velocity onto grid-coordinates for integrations.
-    u, v = dmap.data2grid(u, v)
-
     # speed (path length) will be in axes-coordinates
-    u_ax = u / dmap.grid.nx
-    v_ax = v / dmap.grid.ny
+    u_ax = u / dmap.grid.width
+    v_ax = v / dmap.grid.height
     speed = np.ma.sqrt(u_ax ** 2 + v_ax ** 2)
 
     def forward_time(xi, yi):
@@ -395,8 +489,8 @@ def get_integrator(u, v, dmap, minlength):
         if ds_dt == 0:
             raise TerminateTrajectory()
         dt_ds = 1. / ds_dt
-        ui = interpgrid(u, xi, yi)
-        vi = interpgrid(v, xi, yi)
+        ui = interpgrid(u, xi, yi) * dmap.uscale[int(xi)]
+        vi = interpgrid(v, xi, yi) * dmap.vscale[int(yi)]
         return ui * dt_ds, vi * dt_ds
 
     def backward_time(xi, yi):
@@ -466,7 +560,8 @@ def _integrate_rk12(x0, y0, dmap, f):
     ## increment the location gradually. However, due to the efficient
     ## nature of the interpolation, this doesn't boost speed by much
     ## for quite a bit of complexity.
-    maxds = min(1. / dmap.mask.nx, 1. / dmap.mask.ny, 0.1)
+    maxds = min(1 / dmap.mask.nx, 1. / dmap.mask.ny, 0.1,
+                1 / dmap.grid.nx, 1. / dmap.grid.ny)
 
     ds = maxds
     stotal = 0
