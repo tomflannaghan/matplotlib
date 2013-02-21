@@ -131,8 +131,8 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
         tgx = np.array(t[0])
         tgy = np.array(t[1])
         # Rescale from grid-coordinates to data-coordinates.
-        tx = np.array(t[0]) * grid.dx + grid.x_origin
-        ty = np.array(t[1]) * grid.dy + grid.y_origin
+        tx = tgx #np.array(t[0]) * grid.dx + grid.x_origin
+        ty = tgy #np.array(t[1]) * grid.dy + grid.y_origin
 
         points = np.transpose([tx, ty]).reshape(-1, 1, 2)
         streamlines.extend(np.hstack([points[:-1], points[1:]]))
@@ -209,14 +209,14 @@ class DomainMap(object):
         self.grid = grid
         self.mask = mask
         ## Constants for conversion between grid- and mask-coordinates
-        self.x_grid2mask = float(mask.nx - 1) / grid.nx
-        self.y_grid2mask = float(mask.ny - 1) / grid.ny
+        self.x_grid2mask = float(mask.nx - 1) / grid.width
+        self.y_grid2mask = float(mask.ny - 1) / grid.height
 
         self.x_mask2grid = 1. / self.x_grid2mask
         self.y_mask2grid = 1. / self.y_grid2mask
 
-        self.x_data2grid = grid.nx / grid.width
-        self.y_data2grid = grid.ny / grid.height
+        self.x_data2grid = 1 #grid.nx / grid.width
+        self.y_data2grid = 1 #grid.ny / grid.height
 
     def grid2mask(self, xi, yi):
         """Return nearest space in mask-coords from given grid-coords."""
@@ -354,8 +354,8 @@ def get_integrator(u, v, dmap, minlength):
     u, v = dmap.data2grid(u, v)
 
     # speed (path length) will be in axes-coordinates
-    u_ax = u / dmap.grid.nx
-    v_ax = v / dmap.grid.ny
+    u_ax = u / dmap.grid.width
+    v_ax = v / dmap.grid.height
     speed = np.ma.sqrt(u_ax ** 2 + v_ax ** 2)
 
     def forward_time(xi, yi):
@@ -515,7 +515,6 @@ def _euler_step(xf_traj, yf_traj, dmap, f):
 
 # Utility functions
 #========================
-
 def interpgrid(a, xi, yi):
     """Fast 2D, linear interpolation on an integer grid"""
 
