@@ -65,6 +65,10 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
 
     """
     grid = Grid(x, y)
+    ## need to fix:
+    assert grid.x[1] > grid.x[0]
+    assert grid.y[1] > grid.y[0]
+
     mask = StreamMask(density)
     dmap = DomainMap(grid, mask)
 
