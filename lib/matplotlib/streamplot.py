@@ -140,13 +140,22 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
         arrow_tail = (tx[n], ty[n])
         arrow_head = (np.mean(tx[n:n + 2]), np.mean(ty[n:n + 2]))
 
+        # get indices and fractions for the linewidth and color interp.
+        txi = np.clip((tx[:,None] < grid.x).argmax(-1), 0, len(grid.x)-2)
+        tyi = np.clip((ty[:,None] < grid.y).argmax(-1), 0, len(grid.y)-2)
+        txi[tx >= grid.x[-1]] = len(grid.x)-2
+        tyi[ty >= grid.y[-1]] = len(grid.y)-2
+
+        txf = (tx - grid.x[txi]) / (grid.x[txi+1] - grid.x[txi])
+        tyf = (ty - grid.y[tyi]) / (grid.y[tyi+1] - grid.y[tyi])
+
         if isinstance(linewidth, np.ndarray):
-            line_widths = interpgrid(linewidth, tgx, tgy)[:-1]
+            line_widths = interpgrid(linewidth, txi, txf, tyi, tyf)[:-1]
             line_kw['linewidth'].extend(line_widths)
             arrow_kw['linewidth'] = line_widths[n]
 
         if use_multicolor_lines:
-            color_values = interpgrid(color, tgx, tgy)[:-1]
+            color_values = interpgrid(color, txi, txf, tyi, tyf)[:-1]
             line_colors.extend(color_values)
             arrow_kw['color'] = cmap(norm(color_values[n]))
 
@@ -339,19 +348,20 @@ class TerminateTrajectory(Exception):
 
 ## This integrator now operates in *real space*.
 
+def index_frac(x, x0):
+    index = bisect.bisect(x, x0) - 1
+    if index < 0: raise IndexError
+    if index > len(x)-2: raise IndexError
+    frac = (x0 - x[index]) / (x[index+1] - x[index])
+    return index, frac
+
+
 def get_integrator(x, y, u, v, dmap, minlength):
 
     # speed (path length) will be in axes-coordinates
     u_ax = u / dmap.grid.width
     v_ax = v / dmap.grid.height
     speed = np.ma.sqrt(u_ax ** 2 + v_ax ** 2)
-
-    def index_frac(x, x0):
-        index = bisect.bisect(x, x0) - 1
-        if index < 0: raise IndexError
-        if index > len(x)-2: raise IndexError
-        frac = (x0 - x[index]) / (x[index+1] - x[index])
-        return index, frac
 
     def forward_time(x0, y0):
         xi, xf = index_frac(x, x0)
@@ -451,8 +461,8 @@ def _integrate_rk12(x0, y0, dmap, f):
         except IndexError:
             # Out of the domain on one of the intermediate integration steps.
             # Take an Euler step to the boundary to improve neatness.
-            #ds, xf_traj, yf_traj = _euler_step(xf_traj, yf_traj, dmap, f)
-            #stotal += ds
+            ds, xf_traj, yf_traj = _euler_step(xf_traj, yf_traj, dmap, f)
+            stotal += ds
             break
         except TerminateTrajectory:
             break
@@ -462,9 +472,9 @@ def _integrate_rk12(x0, y0, dmap, f):
         dx2 = ds * 0.5 * (k1x + k2x)
         dy2 = ds * 0.5 * (k1y + k2y)
 
-        nx, ny = dmap.grid.shape
         # Error is normalized to the axes coordinates
-        error = np.sqrt(((dx2 - dx1) / nx) ** 2 + ((dy2 - dy1) / ny) ** 2)
+        error = np.sqrt(((dx2 - dx1) / dmap.grid.width) ** 2 
+                        + ((dy2 - dy1) / dmap.grid.height) ** 2)
 
         # Only save step if within error tolerance
         if error < maxerror:
@@ -496,15 +506,15 @@ def _euler_step(xf_traj, yf_traj, dmap, f):
     if cx == 0:
         dsx = np.inf
     elif cx < 0:
-        dsx = xi / -cx
+        dsx = (xi - dmap.grid.x_origin) / -cx
     else:
-        dsx = (nx - 1 - xi) / cx
+        dsx = (dmap.grid.x[-1] - xi) / cx
     if cy == 0:
         dsy = np.inf
     elif cy < 0:
-        dsy = yi / -cy
+        dsy = (yi - dmap.grid.y_origin) / -cy
     else:
-        dsy = (ny - 1 - yi) / cy
+        dsy = (dmap.grid.y[-1] - yi) / cy
     ds = min(dsx, dsy)
     xf_traj.append(xi + cx * ds)
     yf_traj.append(yi + cy * ds)
