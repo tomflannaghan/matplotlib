@@ -9,7 +9,7 @@ import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.collections as mcollections
 import matplotlib.patches as patches
-
+import bisect
 
 __all__ = ['streamplot']
 
@@ -107,12 +107,12 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
     if np.any(np.isnan(v)):
         v = np.ma.array(v, mask=np.isnan(v))
 
-    integrate = get_integrator(u, v, dmap, minlength)
+    integrate = get_integrator(grid.x, grid.y, u, v, dmap, minlength)
 
     trajectories = []
     for xm, ym in _gen_starting_points(mask.shape):
         if mask[ym, xm] == 0:
-            xg, yg = dmap.mask2grid(xm, ym)
+            xg, yg = dmap.mask2data(xm, ym)
             t = integrate(xg, yg)
             if t is not None:
                 trajectories.append(t)
@@ -206,38 +206,33 @@ class DomainMap(object):
         self.grid = grid
         self.mask = mask
         ## Constants for conversion between grid- and mask-coordinates
-        self.x_grid2mask = float(mask.nx - 1) / grid.width
-        self.y_grid2mask = float(mask.ny - 1) / grid.height
+        self.x_data2mask = float(mask.nx - 1) / grid.width
+        self.y_data2mask = float(mask.ny - 1) / grid.height
 
-        self.x_mask2grid = 1. / self.x_grid2mask
-        self.y_mask2grid = 1. / self.y_grid2mask
+        self.x_mask2data = 1. / self.x_data2mask
+        self.y_mask2data = 1. / self.y_data2mask
 
-        self.x_data2grid = 1 #grid.nx / grid.width
-        self.y_data2grid = 1 #grid.ny / grid.height
+    def data2mask(self, xi, yi):
+        """Return nearest space in mask-coords from given data-coords."""
+        return int((xi - self.grid.x_origin) * self.x_data2mask + 0.5), \
+            int((yi - self.grid.y_origin)  * self.y_data2mask + 0.5)
 
-    def grid2mask(self, xi, yi):
-        """Return nearest space in mask-coords from given grid-coords."""
-        return int((xi * self.x_grid2mask) + 0.5), \
-               int((yi * self.y_grid2mask) + 0.5)
-
-    def mask2grid(self, xm, ym):
-        return xm * self.x_mask2grid, ym * self.y_mask2grid
-
-    def data2grid(self, xd, yd):
-        return xd * self.x_data2grid, yd * self.y_data2grid
+    def mask2data(self, xm, ym):
+        return self.grid.x_origin + xm * self.x_mask2data, \
+            self.grid.y_origin + ym * self.y_mask2data
 
     def start_trajectory(self, xg, yg):
-        xm, ym = self.grid2mask(xg, yg)
+        xm, ym = self.data2mask(xg, yg)
         self.mask._start_trajectory(xm, ym)
 
     def reset_start_point(self, xg, yg):
-        xm, ym = self.grid2mask(xg, yg)
+        xm, ym = self.data2mask(xg, yg)
         self.mask._current_xy = (xm, ym)
 
     def update_trajectory(self, xg, yg):
         if not self.grid.within_grid(xg, yg):
             raise InvalidIndexError
-        xm, ym = self.grid2mask(xg, yg)
+        xm, ym = self.data2mask(xg, yg)
         self.mask._update_trajectory(xm, ym)
 
     def undo_trajectory(self):
@@ -265,12 +260,11 @@ class Grid(object):
         self.nx = len(x)
         self.ny = len(y)
 
-        self.dx = x[1] - x[0]
-        self.dy = y[1] - y[0]
+        self.x = x
+        self.y = y
 
         self.x_origin = x[0]
         self.y_origin = y[0]
-
         self.width = x[-1] - x[0]
         self.height = y[-1] - y[0]
 
@@ -280,10 +274,8 @@ class Grid(object):
 
     def within_grid(self, xi, yi):
         """Return True if point is a valid index of grid."""
-        # Note that xi/yi can be floats; so, for example, we can't simply check
-        # `xi < self.nx` since `xi` can be `self.nx - 1 < xi < self.nx`
-        return xi >= 0 and xi <= self.nx - 1 and yi >= 0 and yi <= self.ny - 1
-
+        return self.x_origin <= xi < self.x_origin + self.width and \
+            self.y_origin <= yi < self.y_origin + self.height
 
 class StreamMask(object):
     """Mask to keep track of discrete regions crossed by streamlines.
@@ -345,23 +337,32 @@ class TerminateTrajectory(Exception):
 # Integrator definitions
 #========================
 
-def get_integrator(u, v, dmap, minlength):
+## This integrator now operates in *real space*.
 
-    # rescale velocity onto grid-coordinates for integrations.
-    u, v = dmap.data2grid(u, v)
+def get_integrator(x, y, u, v, dmap, minlength):
 
     # speed (path length) will be in axes-coordinates
     u_ax = u / dmap.grid.width
     v_ax = v / dmap.grid.height
     speed = np.ma.sqrt(u_ax ** 2 + v_ax ** 2)
 
-    def forward_time(xi, yi):
-        ds_dt = interpgrid(speed, xi, yi)
+    def index_frac(x, x0):
+        index = bisect.bisect(x, x0) - 1
+        if index < 0: raise IndexError
+        if index > len(x)-2: raise IndexError
+        frac = (x0 - x[index]) / (x[index+1] - x[index])
+        return index, frac
+
+    def forward_time(x0, y0):
+        xi, xf = index_frac(x, x0)
+        yi, yf = index_frac(y, y0)
+
+        ds_dt = interpgrid(speed, xi, xf, yi, yf)
         if ds_dt == 0:
             raise TerminateTrajectory()
         dt_ds = 1. / ds_dt
-        ui = interpgrid(u, xi, yi)
-        vi = interpgrid(v, xi, yi)
+        ui = interpgrid(u, xi, xf, yi, yf)
+        vi = interpgrid(v, xi, xf, yi, yf)
         return ui * dt_ds, vi * dt_ds
 
     def backward_time(xi, yi):
@@ -450,8 +451,8 @@ def _integrate_rk12(x0, y0, dmap, f):
         except IndexError:
             # Out of the domain on one of the intermediate integration steps.
             # Take an Euler step to the boundary to improve neatness.
-            ds, xf_traj, yf_traj = _euler_step(xf_traj, yf_traj, dmap, f)
-            stotal += ds
+            #ds, xf_traj, yf_traj = _euler_step(xf_traj, yf_traj, dmap, f)
+            #stotal += ds
             break
         except TerminateTrajectory:
             break
@@ -512,38 +513,16 @@ def _euler_step(xf_traj, yf_traj, dmap, f):
 
 # Utility functions
 #========================
-def interpgrid(a, xi, yi):
+def interpgrid(a, xi, xf, yi, yf):
     """Fast 2D, linear interpolation on an integer grid"""
 
-    Ny, Nx = np.shape(a)
-    if isinstance(xi, np.ndarray):
-        x = xi.astype(np.int)
-        y = yi.astype(np.int)
-        # Check that xn, yn don't exceed max index
-        xn = np.clip(x + 1, 0, Nx - 1)
-        yn = np.clip(y + 1, 0, Ny - 1)
-    else:
-        x = np.int(xi)
-        y = np.int(yi)
-        # conditional is faster than clipping for integers
-        if x == (Nx - 2):
-            xn = x
-        else:
-            xn = x + 1
-        if y == (Ny - 2):
-            yn = y
-        else:
-            yn = y + 1
-
-    a00 = a[y, x]
-    a01 = a[y, xn]
-    a10 = a[yn, x]
-    a11 = a[yn, xn]
-    xt = xi - x
-    yt = yi - y
-    a0 = a00 * (1 - xt) + a01 * xt
-    a1 = a10 * (1 - xt) + a11 * xt
-    ai = a0 * (1 - yt) + a1 * yt
+    a00 = a[yi, xi]
+    a01 = a[yi, xi+1]
+    a10 = a[yi+1, xi]
+    a11 = a[yi+1, xi+1]
+    a0 = a00 * (1 - xf) + a01 * xf
+    a1 = a10 * (1 - xf) + a11 * xf
+    ai = a0 * (1 - yf) + a1 * yf
 
     if not isinstance(xi, np.ndarray):
         if np.ma.is_masked(ai):

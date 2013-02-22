@@ -6,9 +6,10 @@ U = -1 - X**2 + Y
 V = 1 + X - Y**2
 speed = np.sqrt(U*U + V*V)
 
-plt.streamplot(X, Y, U, V, color=U, linewidth=2, cmap=plt.cm.autumn)
-plt.colorbar()
-
+plt.streamplot(X, Y, U, V)#, color=U, linewidth=2, cmap=plt.cm.autumn)
+#plt.colorbar()
+plt.show()
+endhere
 f, (ax1, ax2) = plt.subplots(ncols=2)
 ax1.streamplot(X, Y, U, V, density=[0.5, 1])
 
