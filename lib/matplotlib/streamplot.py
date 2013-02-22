@@ -128,11 +128,8 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
     streamlines = []
     arrows = []
     for t in trajectories:
-        tgx = np.array(t[0])
-        tgy = np.array(t[1])
-        # Rescale from grid-coordinates to data-coordinates.
-        tx = tgx #np.array(t[0]) * grid.dx + grid.x_origin
-        ty = tgy #np.array(t[1]) * grid.dy + grid.y_origin
+        tx = np.array(t[0])
+        ty = np.array(t[1])
 
         points = np.transpose([tx, ty]).reshape(-1, 1, 2)
         streamlines.extend(np.hstack([points[:-1], points[1:]]))
