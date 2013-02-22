@@ -1,7 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-Y, X = np.mgrid[-3:3:100j, -3:3:100j]
+Y, X = np.mgrid[0:1:100j, 0:1:100j]
+
+#X **= 2
+#Y **= 0.5
+
+X = 6 * X - 3
+Y = 6 * Y - 3
+
 U = -1 - X**2 + Y
 V = 1 + X - Y**2
 speed = np.sqrt(U*U + V*V)

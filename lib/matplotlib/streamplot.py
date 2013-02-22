@@ -140,22 +140,13 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
         arrow_tail = (tx[n], ty[n])
         arrow_head = (np.mean(tx[n:n + 2]), np.mean(ty[n:n + 2]))
 
-        # get indices and fractions for the linewidth and color interp.
-        txi = np.clip((tx[:,None] < grid.x).argmax(-1), 0, len(grid.x)-2)
-        tyi = np.clip((ty[:,None] < grid.y).argmax(-1), 0, len(grid.y)-2)
-        txi[tx >= grid.x[-1]] = len(grid.x)-2
-        tyi[ty >= grid.y[-1]] = len(grid.y)-2
-
-        txf = (tx - grid.x[txi]) / (grid.x[txi+1] - grid.x[txi])
-        tyf = (ty - grid.y[tyi]) / (grid.y[tyi+1] - grid.y[tyi])
-
         if isinstance(linewidth, np.ndarray):
-            line_widths = interpgrid(linewidth, txi, txf, tyi, tyf)[:-1]
+            line_widths = interparray(grid, linewidth, tx, ty)[:-1]
             line_kw['linewidth'].extend(line_widths)
             arrow_kw['linewidth'] = line_widths[n]
 
         if use_multicolor_lines:
-            color_values = interpgrid(color, txi, txf, tyi, tyf)[:-1]
+            color_values = interparray(grid, color, tx, ty)[:-1]
             line_colors.extend(color_values)
             arrow_kw['color'] = cmap(norm(color_values[n]))
 
@@ -524,7 +515,15 @@ def _euler_step(xf_traj, yf_traj, dmap, f):
 # Utility functions
 #========================
 def interpgrid(a, xi, xf, yi, yf):
-    """Fast 2D, linear interpolation on an integer grid"""
+    """Fast 2D, linear interpolation on an integer grid.
+
+    xi, yi are indices of array a corresponding to the cell of the
+           array in which the point lies.
+
+    xf, yf are the fractional indices corresponding to the location
+           within the cell. These are typically between 0 and 1 (not
+           required.)                      
+    """
 
     a00 = a[yi, xi]
     a01 = a[yi, xi+1]
@@ -540,6 +539,19 @@ def interpgrid(a, xi, xf, yi, yf):
 
     return ai
 
+def interparray(grid, a, x, y):
+    """A simple 2d interpolation routine at points x and y (numpy
+    arrays). Returns a numpy array of a at points x[i], y[i]."""
+
+    xi = np.clip((x[:,None] < grid.x).argmax(-1), 0, len(grid.x)-2)
+    yi = np.clip((y[:,None] < grid.y).argmax(-1), 0, len(grid.y)-2)
+    xi[x >= grid.x[-1]] = len(grid.x)-2
+    yi[y >= grid.y[-1]] = len(grid.y)-2
+
+    xf = (x - grid.x[xi]) / (grid.x[xi+1] - grid.x[xi])
+    yf = (y - grid.y[yi]) / (grid.y[yi+1] - grid.y[yi])
+
+    return interpgrid(a, xi, xf, yi, yf)
 
 def _gen_starting_points(shape):
     """Yield starting points for streamlines.
