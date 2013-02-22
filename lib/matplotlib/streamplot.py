@@ -191,8 +191,6 @@ class DomainMap(object):
 
     * axes-coordinates goes from 0 to 1 in the domain.
     * data-coordinates are specified by the input x-y coordinates.
-    * grid-coordinates goes from 0 to N and 0 to M for an N x M grid,
-      where N and M match the shape of the input data.
     * mask-coordinates goes from 0 to N and 0 to M for an N x M mask,
       where N and M are user-specified to control the density of streamlines.
 
@@ -354,16 +352,16 @@ def get_integrator(x, y, u, v, dmap, minlength):
     v_ax = v / dmap.grid.height
     speed = np.ma.sqrt(u_ax ** 2 + v_ax ** 2)
 
-    def forward_time(x0, y0):
-        xi, xf = index_frac(x, x0)
-        yi, yf = index_frac(y, y0)
+    def forward_time(xi, yi):
+        xn, xf = index_frac(x, xi)
+        yn, yf = index_frac(y, yi)
 
-        ds_dt = interpgrid(speed, xi, xf, yi, yf)
+        ds_dt = interpgrid(speed, xn, xf, yn, yf)
         if ds_dt == 0:
             raise TerminateTrajectory()
         dt_ds = 1. / ds_dt
-        ui = interpgrid(u, xi, xf, yi, yf)
-        vi = interpgrid(v, xi, xf, yi, yf)
+        ui = interpgrid(u, xn, xf, yn, yf)
+        vi = interpgrid(v, xn, xf, yn, yf)
         return ui * dt_ds, vi * dt_ds
 
     def backward_time(xi, yi):
@@ -514,26 +512,26 @@ def _euler_step(xf_traj, yf_traj, dmap, f):
 
 # Utility functions
 #========================
-def interpgrid(a, xi, xf, yi, yf):
+def interpgrid(a, xn, xf, yn, yf):
     """Fast 2D, linear interpolation on an integer grid.
 
-    xi, yi are indices of array a corresponding to the cell of the
-           array in which the point lies.
+    xn, yn are integer indices of array a corresponding to the cell of
+           the array in which the point lies.
 
     xf, yf are the fractional indices corresponding to the location
            within the cell. These are typically between 0 and 1 (not
            required.)                      
     """
 
-    a00 = a[yi, xi]
-    a01 = a[yi, xi+1]
-    a10 = a[yi+1, xi]
-    a11 = a[yi+1, xi+1]
+    a00 = a[yn, xn]
+    a01 = a[yn, xn+1]
+    a10 = a[yn+1, xn]
+    a11 = a[yn+1, xn+1]
     a0 = a00 * (1 - xf) + a01 * xf
     a1 = a10 * (1 - xf) + a11 * xf
     ai = a0 * (1 - yf) + a1 * yf
 
-    if not isinstance(xi, np.ndarray):
+    if not isinstance(xn, np.ndarray):
         if np.ma.is_masked(ai):
             raise TerminateTrajectory
 
@@ -543,15 +541,15 @@ def interparray(grid, a, x, y):
     """A simple 2d interpolation routine at points x and y (numpy
     arrays). Returns a numpy array of a at points x[i], y[i]."""
 
-    xi = np.clip((x[:,None] < grid.x).argmax(-1), 0, len(grid.x)-2)
-    yi = np.clip((y[:,None] < grid.y).argmax(-1), 0, len(grid.y)-2)
-    xi[x >= grid.x[-1]] = len(grid.x)-2
-    yi[y >= grid.y[-1]] = len(grid.y)-2
+    xn = np.clip((x[:,None] < grid.x).argmax(-1), 0, len(grid.x)-2)
+    yn = np.clip((y[:,None] < grid.y).argmax(-1), 0, len(grid.y)-2)
+    xn[x >= grid.x[-1]] = len(grid.x)-2
+    yn[y >= grid.y[-1]] = len(grid.y)-2
 
-    xf = (x - grid.x[xi]) / (grid.x[xi+1] - grid.x[xi])
-    yf = (y - grid.y[yi]) / (grid.y[yi+1] - grid.y[yi])
+    xf = (x - grid.x[xn]) / (grid.x[xn+1] - grid.x[xn])
+    yf = (y - grid.y[yn]) / (grid.y[yn+1] - grid.y[yn])
 
-    return interpgrid(a, xi, xf, yi, yf)
+    return interpgrid(a, xn, xf, yn, yf)
 
 def _gen_starting_points(shape):
     """Yield starting points for streamlines.
