@@ -20,7 +20,7 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
     """Draws streamlines of a vector flow.
 
     *x*, *y* : 1d arrays
-        an *evenly spaced* grid.
+        defines the grid.
     *u*, *v* : 2d arrays
         x and y-velocities. Number of rows should match length of y, and
         the number of columns should match x.
@@ -65,9 +65,17 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
 
     """
     grid = Grid(x, y)
-    ## need to fix:
-    assert grid.x[1] > grid.x[0]
-    assert grid.y[1] > grid.y[0]
+    # Handle decreasing x and y by changing sign. The sign is changed
+    # back after the integration routines (not totally happy with
+    # this).
+    x_increasing = grid.x[1] > grid.x[0]
+    if not x_increasing: 
+        grid = Grid(-grid.x, grid.y)
+        u = -u
+    y_increasing = grid.y[1] > grid.y[0]
+    if not y_increasing: 
+        grid = Grid(grid.x, -grid.y)
+        v = -v
 
     mask = StreamMask(density)
     dmap = DomainMap(grid, mask)
@@ -134,6 +142,13 @@ def streamplot(axes, x, y, u, v, density=1, linewidth=None, color=None,
     for t in trajectories:
         tx = np.array(t[0])
         ty = np.array(t[1])
+
+        ## undoes the sign change put in place for the handling of
+        ## decreasing x and y arrays.
+        if not x_increasing:
+            tx = -tx
+        if not y_increasing:
+            ty = -ty
 
         points = np.transpose([tx, ty]).reshape(-1, 1, 2)
         streamlines.extend(np.hstack([points[:-1], points[1:]]))
@@ -357,15 +372,15 @@ def get_integrator(x, y, u, v, dmap, minlength):
     speed = np.ma.sqrt(u_ax ** 2 + v_ax ** 2)
 
     def forward_time(xi, yi):
-        xn, xf = index_frac(x, xi)
-        yn, yf = index_frac(y, yi)
+        i_x, dx = index_frac(x, xi)
+        i_y, dy = index_frac(y, yi)
 
-        ds_dt = interpgrid(speed, xn, xf, yn, yf)
+        ds_dt = interpgrid(speed, i_x, dx, i_y, dy)
         if ds_dt == 0:
             raise TerminateTrajectory()
         dt_ds = 1. / ds_dt
-        ui = interpgrid(u, xn, xf, yn, yf)
-        vi = interpgrid(v, xn, xf, yn, yf)
+        ui = interpgrid(u, i_x, dx, i_y, dy)
+        vi = interpgrid(v, i_x, dx, i_y, dy)
         return ui * dt_ds, vi * dt_ds
 
     def backward_time(xi, yi):
@@ -516,26 +531,26 @@ def _euler_step(xf_traj, yf_traj, dmap, f):
 
 # Utility functions
 #========================
-def interpgrid(a, xn, xf, yn, yf):
+def interpgrid(a, i_x, dx, i_y, dy):
     """Fast 2D, linear interpolation on an integer grid.
 
-    xn, yn are integer indices of array a corresponding to the cell of
+    i_x, i_y are integer indices of array a corresponding to the cell of
            the array in which the point lies.
 
-    xf, yf are the fractional indices corresponding to the location
+    dx, dy are the fractional indices corresponding to the location
            within the cell. These are typically between 0 and 1 (not
            required.)                      
     """
 
-    a00 = a[yn, xn]
-    a01 = a[yn, xn+1]
-    a10 = a[yn+1, xn]
-    a11 = a[yn+1, xn+1]
-    a0 = a00 * (1 - xf) + a01 * xf
-    a1 = a10 * (1 - xf) + a11 * xf
-    ai = a0 * (1 - yf) + a1 * yf
+    a00 = a[i_y, i_x]
+    a01 = a[i_y, i_x+1]
+    a10 = a[i_y+1, i_x]
+    a11 = a[i_y+1, i_x+1]
+    a0 = a00 * (1 - dx) + a01 * dx
+    a1 = a10 * (1 - dx) + a11 * dx
+    ai = a0 * (1 - dy) + a1 * dy
 
-    if not isinstance(xn, np.ndarray):
+    if not isinstance(i_x, np.ndarray):
         if np.ma.is_masked(ai):
             raise TerminateTrajectory
 
@@ -545,15 +560,14 @@ def interparray(grid, a, x, y):
     """A simple 2d interpolation routine at points x and y (numpy
     arrays). Returns a numpy array of a at points x[i], y[i]."""
 
-    xn = np.clip((x[:,None] < grid.x).argmax(-1), 0, len(grid.x)-2)
-    yn = np.clip((y[:,None] < grid.y).argmax(-1), 0, len(grid.y)-2)
-    xn[x >= grid.x[-1]] = len(grid.x)-2
-    yn[y >= grid.y[-1]] = len(grid.y)-2
+    i_x = np.clip((x[:,None] < grid.x).argmax(-1), 0, len(grid.x)-2)
+    i_y = np.clip((y[:,None] < grid.y).argmax(-1), 0, len(grid.y)-2)
+    i_x[x >= grid.x[-1]] = len(grid.x)-2
+    i_y[y >= grid.y[-1]] = len(grid.y)-2
 
-    xf = (x - grid.x[xn]) / (grid.x[xn+1] - grid.x[xn])
-    yf = (y - grid.y[yn]) / (grid.y[yn+1] - grid.y[yn])
-
-    return interpgrid(a, xn, xf, yn, yf)
+    dx = (x - grid.x[i_x]) / (grid.x[i_x+1] - grid.x[i_x])
+    dy = (y - grid.y[i_y]) / (grid.y[i_y+1] - grid.y[i_y])
+    return interpgrid(a, i_x, dx, i_y, dy)
 
 def _gen_starting_points(shape):
     """Yield starting points for streamlines.

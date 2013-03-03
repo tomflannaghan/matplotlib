@@ -3,10 +3,10 @@ import matplotlib.pyplot as plt
 
 Y, X = np.mgrid[0:1:100j, 0:1:100j]
 
-#X **= 2
-#Y **= 0.5
+X **= 2
+Y **= 0.5
 
-X = 6 * X - 3
+X = 7 * X - 3
 Y = 6 * Y - 3
 
 U = -1 - X**2 + Y
@@ -18,6 +18,12 @@ t = time.time()
 plt.streamplot(X, Y, U, V, color=U, linewidth=2, cmap=plt.cm.autumn)
 plt.colorbar()
 print time.time() - t
+
+plt.figure()
+t = time.time()
+plt.streamplot(-X, -Y, -U, -V, color=U, linewidth=2, cmap=plt.cm.autumn)
+plt.colorbar()
+
 
 f, (ax1, ax2) = plt.subplots(ncols=2)
 ax1.streamplot(X, Y, U, V, density=[0.5, 1])
